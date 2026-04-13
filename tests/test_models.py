@@ -16,8 +16,8 @@ def test_beat_grid_beat_to_ms():
 def test_beat_grid_ms_to_beat():
     grid = BeatGrid(first_beat_ms=77.0, bpm=128.0)
     assert grid.ms_to_beat(77.0) == 1
-    # Halfway between beat 1 and 2 rounds to nearest
-    assert grid.ms_to_beat(77.0 + 60000 / 128 / 2) == 1 or grid.ms_to_beat(77.0 + 60000 / 128 / 2) == 2
+    # Halfway between beat 1 and 2: raw=1.5, Python banker's rounding -> 2
+    assert grid.ms_to_beat(77.0 + 60000 / 128 / 2) == 2
 
 
 def test_beat_grid_bars_to_ms():
