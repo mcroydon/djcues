@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import warnings
 import click
+
+# Suppress noisy pyrekordbox warnings (PVDI tag, rekordbox running, etc.)
+for _name in ("pyrekordbox", "pyrekordbox.db6", "pyrekordbox.anlz"):
+    logging.getLogger(_name).setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore", module="pyrekordbox")
 
 from djcues.constants import CUE_SYSTEM_BY_PAD, KIND_TO_PAD
 from djcues.db import find_playlist, load_playlist_tracks
