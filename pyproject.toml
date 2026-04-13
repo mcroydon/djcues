@@ -1,0 +1,27 @@
+[project]
+name = "djcues"
+version = "0.1.0"
+description = "Automated rekordbox cue placement based on phrase analysis"
+requires-python = ">=3.10"
+dependencies = [
+    "pyrekordbox>=0.4.4",
+    "click>=8.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+djcues = "djcues.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/djcues"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
