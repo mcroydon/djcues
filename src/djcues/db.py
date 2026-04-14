@@ -8,7 +8,7 @@ from typing import Any
 from pyrekordbox import Rekordbox6Database
 
 from djcues.constants import resolve_phrase_label
-from djcues.models import BeatGrid, CuePoint, Phrase, Track
+from djcues.models import BeatGrid, CuePoint, Phrase, Track, WaveformPoint
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +118,44 @@ def _extract_cues(track_content: Any) -> list[CuePoint]:
     return cues
 
 
+def _extract_waveform(track_content: Any, max_points: int = 800) -> list[WaveformPoint] | None:
+    """Extract color waveform from PWV5 tag, downsampled for display."""
+    db = get_db()
+    try:
+        anlz_files = db.read_anlz_files(track_content)
+        for path, af in anlz_files.items():
+            if path.suffix == ".EXT":
+                for tag in af.tags:
+                    if type(tag).__name__ == "PWV5AnlzTag":
+                        heights, colors = tag.get()
+                        n = len(heights)
+                        step = max(1, n // max_points)
+                        points: list[WaveformPoint] = []
+                        for i in range(0, n, step):
+                            # Take max height in each chunk for peak representation
+                            chunk_end = min(i + step, n)
+                            peak_idx = i
+                            for j in range(i, chunk_end):
+                                if heights[j] > heights[peak_idx]:
+                                    peak_idx = j
+                            points.append(WaveformPoint(
+                                height=float(heights[peak_idx]),
+                                red=int(colors[peak_idx, 0]),
+                                green=int(colors[peak_idx, 1]),
+                                blue=int(colors[peak_idx, 2]),
+                            ))
+                        return points
+    except Exception as e:
+        logger.warning("Could not read waveform for %s: %s", track_content.Title, e)
+    return None
+
+
 def load_track(track_content: Any) -> Track:
     """Load a single track with all analysis data."""
     beat_grid = _extract_beat_grid(track_content)
     phrases = _extract_phrases(track_content, beat_grid)
     cues = _extract_cues(track_content)
+    waveform = _extract_waveform(track_content)
 
     artist_name = ""
     if track_content.Artist:
@@ -138,6 +171,7 @@ def load_track(track_content: Any) -> Track:
         cues=cues,
         phrases=phrases,
         beat_grid=beat_grid,
+        waveform=waveform,
     )
 
 

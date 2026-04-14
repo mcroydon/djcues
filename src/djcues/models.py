@@ -63,6 +63,24 @@ class Phrase:
 
 
 @dataclass
+class WaveformPoint:
+    """A single point in the color waveform."""
+
+    height: float  # 0.0–1.0 normalized amplitude
+    red: int  # 0–7 (bass)
+    green: int  # 0–7 (mid)
+    blue: int  # 0–7 (treble)
+
+    @property
+    def rgb_hex(self) -> str:
+        """Scale 3-bit color to hex, clamping to 0-7."""
+        r = min(self.red, 7) * 255 // 7
+        g = min(self.green, 7) * 255 // 7
+        b = min(self.blue, 7) * 255 // 7
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+
+@dataclass
 class Track:
     """A rekordbox track with analysis data."""
 
@@ -75,6 +93,7 @@ class Track:
     cues: list[CuePoint]
     phrases: list[Phrase]
     beat_grid: BeatGrid
+    waveform: list[WaveformPoint] | None = None  # color waveform data
 
 
 @dataclass

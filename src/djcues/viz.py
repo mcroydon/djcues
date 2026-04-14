@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 
 from djcues.constants import CUE_SYSTEM_BY_PAD, KIND_TO_PAD
-from djcues.models import CuePoint, CueProposal, Track
+from djcues.models import CuePoint, CueProposal, Track, WaveformPoint
 
 PHRASE_COLORS: dict[str, str] = {
     "Intro": "#6c757d",
@@ -63,18 +63,29 @@ def _render_cue_markers(
 ) -> str:
     """Render hot cue markers (above) and memory cue markers (below) the phrase bar."""
     markers = []
+    # Track label offsets to nudge overlapping labels
+    OVERLAP_THRESHOLD_PCT = 0.3  # positions within this % are considered overlapping
+    NUDGE_PX = 14  # pixels to nudge each successive overlapping label
 
     # Hot cue markers (above the bar)
+    prev_hot_pct = -999.0
+    hot_nudge_count = 0
     for cue in sorted(hot_cues, key=lambda c: c.position_ms):
         pad = KIND_TO_PAD.get(cue.kind, "?")
         left_pct = (cue.position_ms / total_ms) * 100
         color = CUE_COLORS.get(pad, "#aaa")
         comment = html.escape(cue.comment)
+        if abs(left_pct - prev_hot_pct) < OVERLAP_THRESHOLD_PCT:
+            hot_nudge_count += 1
+        else:
+            hot_nudge_count = 0
+        prev_hot_pct = left_pct
+        label_offset = 4 + hot_nudge_count * NUDGE_PX
         markers.append(
             f'<div class="hot-cue-marker {css_class_prefix}" '
             f'style="left:{left_pct:.4f}%;border-left-color:{color};" '
             f'title="{comment} @ {_format_time(cue.position_ms)}">'
-            f'<span class="marker-label" style="color:{color};">{html.escape(pad)}</span>'
+            f'<span class="marker-label" style="color:{color};left:{label_offset}px;">{html.escape(pad)}</span>'
             f"</div>"
         )
         # Loop range indicator for hot cues
@@ -88,6 +99,8 @@ def _render_cue_markers(
             )
 
     # Memory cue markers (below the bar)
+    prev_mem_pct = -999.0
+    mem_nudge_count = 0
     for i, cue in enumerate(sorted(memory_cues, key=lambda c: c.position_ms)):
         left_pct = (cue.position_ms / total_ms) * 100
         # Find which pad this memory cue belongs to via comment matching
@@ -97,11 +110,17 @@ def _render_cue_markers(
                 marker_color = CUE_COLORS.get(pad, "#aaa")
                 break
         comment = html.escape(cue.comment)
+        if abs(left_pct - prev_mem_pct) < OVERLAP_THRESHOLD_PCT:
+            mem_nudge_count += 1
+        else:
+            mem_nudge_count = 0
+        prev_mem_pct = left_pct
+        label_offset = 4 + mem_nudge_count * NUDGE_PX
         markers.append(
             f'<div class="mem-cue-marker {css_class_prefix}" '
             f'style="left:{left_pct:.4f}%;border-left-color:{marker_color};" '
             f'title="{comment} @ {_format_time(cue.position_ms)}">'
-            f'<span class="marker-label" style="color:{marker_color};">{i + 1}</span>'
+            f'<span class="marker-label" style="color:{marker_color};left:{label_offset}px;">{i + 1}</span>'
             f"</div>"
         )
         # Loop range indicator for memory cues
@@ -139,6 +158,34 @@ def _render_confidence_bars(confidence: dict[str, float]) -> str:
     return "\n".join(bars)
 
 
+def _render_waveform(waveform: list[WaveformPoint] | None) -> str:
+    """Render the color waveform as an inline SVG (half-waveform, bars grow upward)."""
+    if not waveform:
+        return ""
+    n = len(waveform)
+    bar_width = 1
+    svg_w = n * bar_width
+    svg_h = 32
+
+    bars = []
+    for i, pt in enumerate(waveform):
+        x = i * bar_width
+        bar_h = max(1, int(pt.height * svg_h))
+        color = pt.rgb_hex
+        # Half-waveform: bars grow upward from bottom
+        bars.append(
+            f'<rect x="{x}" y="{svg_h - bar_h}" width="{bar_width}" '
+            f'height="{bar_h}" fill="{color}" />'
+        )
+
+    return (
+        f'<svg class="waveform-svg" viewBox="0 0 {svg_w} {svg_h}" '
+        f'preserveAspectRatio="none">'
+        + "".join(bars)
+        + "</svg>"
+    )
+
+
 def _render_timeline_section(
     title: str,
     hot_cues: list[CuePoint],
@@ -146,15 +193,20 @@ def _render_timeline_section(
     phrases,
     total_ms: float,
     css_class_prefix: str = "",
+    waveform: list[WaveformPoint] | None = None,
 ) -> str:
-    """Render one full timeline section (label + hot markers + phrase bar + mem markers)."""
+    """Render one full timeline section (label + hot markers + waveform + phrase bar + mem markers)."""
     phrase_bar = _render_phrase_bar(phrases, total_ms)
     cue_markers = _render_cue_markers(hot_cues, memory_cues, total_ms, css_class_prefix)
+    waveform_html = _render_waveform(waveform)
     return f"""
     <div class="timeline-section">
       <h3>{html.escape(title)}</h3>
       <div class="timeline-container">
         {cue_markers}
+        <div class="waveform-container">
+          {waveform_html}
+        </div>
         <div class="phrase-bar">
           {phrase_bar}
         </div>
@@ -196,6 +248,7 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
 
     # Timeline sections
     timelines_html = ""
+    wf = track.waveform
     if compare and track.cues:
         # Split existing cues into hot and memory
         existing_hot = [c for c in track.cues if c.kind > 0]
@@ -207,6 +260,7 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
             track.phrases,
             total_ms,
             css_class_prefix="existing",
+            waveform=wf,
         )
         timelines_html += _render_timeline_section(
             "Proposed Cues",
@@ -215,6 +269,7 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
             track.phrases,
             total_ms,
             css_class_prefix="proposed",
+            waveform=wf,
         )
     else:
         timelines_html += _render_timeline_section(
@@ -223,6 +278,7 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
             proposal.memory_cues,
             track.phrases,
             total_ms,
+            waveform=wf,
         )
 
     # Confidence bars
@@ -274,18 +330,34 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
   .timeline-section {{ margin-bottom: 32px; }}
   .timeline-container {{
     position: relative;
-    height: 120px;
+    height: 200px;
     margin: 0 10px;
+  }}
+
+  /* Waveform */
+  .waveform-container {{
+    position: absolute;
+    top: 40px;
+    left: 0; right: 0;
+    height: 80px;
+    background: #111122;
+    border-radius: 4px 4px 0 0;
+    overflow: hidden;
+  }}
+  .waveform-svg {{
+    width: 100%;
+    height: 100%;
+    display: block;
   }}
 
   /* Phrase bar */
   .phrase-bar {{
     position: absolute;
-    top: 40px;
+    top: 120px;
     left: 0; right: 0;
     height: 40px;
     background: #2a2a3e;
-    border-radius: 4px;
+    border-radius: 0 0 4px 4px;
     overflow: hidden;
   }}
   .phrase-segment {{
@@ -307,7 +379,7 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
     padding: 0 3px;
   }}
 
-  /* Hot cue markers (above bar) */
+  /* Hot cue markers (above waveform) */
   .hot-cue-marker {{
     position: absolute;
     top: 0;
@@ -319,17 +391,16 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
   .hot-cue-marker .marker-label {{
     position: absolute;
     top: -2px;
-    left: -8px;
+    left: 4px;
     font-size: 0.75rem;
     font-weight: 700;
-    width: 16px;
-    text-align: center;
+    white-space: nowrap;
   }}
 
-  /* Memory cue markers (below bar) */
+  /* Memory cue markers (below phrase bar) */
   .mem-cue-marker {{
     position: absolute;
-    top: 80px;
+    top: 160px;
     width: 0;
     height: 40px;
     border-left: 2px dashed;
@@ -338,11 +409,10 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
   .mem-cue-marker .marker-label {{
     position: absolute;
     bottom: -2px;
-    left: -8px;
+    left: 4px;
     font-size: 0.75rem;
     font-weight: 700;
-    width: 16px;
-    text-align: center;
+    white-space: nowrap;
   }}
 
   /* Loop range bars */
@@ -354,7 +424,7 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
     z-index: 5;
   }}
   .hot-loop {{ top: 36px; }}
-  .mem-loop {{ top: 80px; }}
+  .mem-loop {{ top: 160px; }}
 
   /* Confidence bars */
   .confidence-section {{ margin-bottom: 24px; }}
