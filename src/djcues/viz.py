@@ -215,17 +215,182 @@ def _render_timeline_section(
     """
 
 
-def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) -> str:
-    """Render a complete HTML page with phrase timeline and cue markers.
+_PAGE_CSS = """
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #eee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 4px; }
+  h2 { font-size: 1.1rem; font-weight: 400; color: #aaa; margin-bottom: 16px; }
+  h3 { font-size: 1rem; color: #ccc; margin-bottom: 8px; }
+  .header { margin-bottom: 24px; }
+  .header .meta { color: #888; font-size: 0.9rem; }
 
-    Args:
-        track: The track to visualize.
-        proposal: The proposed cue placement.
-        compare: If True and track has existing cues, show both existing and proposed.
+  /* Track card (playlist view) */
+  .track-card {
+    border: 1px solid #2a2a3e;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 28px;
+  }
+  .track-card .header { margin-bottom: 16px; }
 
-    Returns:
-        A complete HTML document string.
-    """
+  /* Legend */
+  .legend { margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px; }
+  .legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 0.85rem; }
+  .legend-swatch {
+    display: inline-block; width: 14px; height: 14px;
+    border-radius: 3px; flex-shrink: 0;
+  }
+
+  /* Timeline */
+  .timeline-section { margin-bottom: 32px; }
+  .timeline-container {
+    position: relative;
+    height: 200px;
+    margin: 0 10px;
+  }
+
+  /* Waveform */
+  .waveform-container {
+    position: absolute;
+    top: 40px;
+    left: 0; right: 0;
+    height: 80px;
+    background: #111122;
+    border-radius: 4px 4px 0 0;
+    overflow: hidden;
+  }
+  .waveform-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* Phrase bar */
+  .phrase-bar {
+    position: absolute;
+    top: 120px;
+    left: 0; right: 0;
+    height: 40px;
+    background: #2a2a3e;
+    border-radius: 0 0 4px 4px;
+    overflow: hidden;
+  }
+  .phrase-segment {
+    position: absolute;
+    top: 0; height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-right: 1px solid rgba(0,0,0,0.3);
+  }
+  .phrase-label {
+    font-size: 0.7rem;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 3px;
+  }
+
+  /* Hot cue markers (above waveform) */
+  .hot-cue-marker {
+    position: absolute;
+    top: 0;
+    width: 0;
+    height: 40px;
+    border-left: 2px solid;
+    z-index: 10;
+  }
+  .hot-cue-marker .marker-label {
+    position: absolute;
+    top: -2px;
+    left: 4px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* Memory cue markers (below phrase bar) */
+  .mem-cue-marker {
+    position: absolute;
+    top: 160px;
+    width: 0;
+    height: 40px;
+    border-left: 2px dashed;
+    z-index: 10;
+  }
+  .mem-cue-marker .marker-label {
+    position: absolute;
+    bottom: -2px;
+    left: 4px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* Loop range bars */
+  .loop-range {
+    position: absolute;
+    height: 4px;
+    opacity: 0.5;
+    border-radius: 2px;
+    z-index: 5;
+  }
+  .hot-loop { top: 36px; }
+  .mem-loop { top: 160px; }
+
+  /* Confidence bars */
+  .confidence-section { margin-bottom: 24px; }
+  .conf-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .conf-pad { font-weight: 700; font-family: monospace; width: 28px; text-align: center; }
+  .conf-label { width: 140px; font-size: 0.85rem; color: #aaa; }
+  .conf-bar-bg {
+    flex: 1;
+    height: 14px;
+    background: #2a2a3e;
+    border-radius: 3px;
+    overflow: hidden;
+    max-width: 300px;
+  }
+  .conf-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .conf-pct { width: 40px; text-align: right; font-size: 0.85rem; color: #888; }
+
+  /* Notes */
+  .notes-section { margin-top: 20px; }
+  .notes-section ul { list-style: none; padding-left: 0; }
+  .notes-section li {
+    font-size: 0.85rem;
+    color: #aaa;
+    padding: 2px 0;
+  }
+  .notes-section li::before {
+    content: "\\2022\\00a0";
+    color: #555;
+  }
+"""
+
+
+def _render_track_body(
+    track: Track, proposal: CueProposal, compare: bool = False
+) -> str:
+    """Render the body content for a single track (no page shell)."""
     total_ms = track.duration_ms
     title = html.escape(track.title)
     artist = html.escape(track.artist)
@@ -250,237 +415,94 @@ def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) 
     timelines_html = ""
     wf = track.waveform
     if compare and track.cues:
-        # Split existing cues into hot and memory
         existing_hot = [c for c in track.cues if c.kind > 0]
         existing_mem = [c for c in track.cues if c.kind == 0]
         timelines_html += _render_timeline_section(
-            "Existing Cues",
-            existing_hot,
-            existing_mem,
-            track.phrases,
-            total_ms,
-            css_class_prefix="existing",
-            waveform=wf,
+            "Existing Cues", existing_hot, existing_mem,
+            track.phrases, total_ms, css_class_prefix="existing", waveform=wf,
         )
         timelines_html += _render_timeline_section(
-            "Proposed Cues",
-            proposal.hot_cues,
-            proposal.memory_cues,
-            track.phrases,
-            total_ms,
-            css_class_prefix="proposed",
-            waveform=wf,
+            "Proposed Cues", proposal.hot_cues, proposal.memory_cues,
+            track.phrases, total_ms, css_class_prefix="proposed", waveform=wf,
         )
     else:
         timelines_html += _render_timeline_section(
-            "Proposed Cues",
-            proposal.hot_cues,
-            proposal.memory_cues,
-            track.phrases,
-            total_ms,
-            waveform=wf,
+            "Proposed Cues", proposal.hot_cues, proposal.memory_cues,
+            track.phrases, total_ms, waveform=wf,
         )
 
-    # Confidence bars
     confidence_html = _render_confidence_bars(proposal.confidence)
 
-    # Notes
     notes_html = ""
     if proposal.notes:
         notes_items = "\n".join(
             f"<li>{html.escape(note)}</li>" for note in proposal.notes
         )
-        notes_html = f"""
-        <div class="notes-section">
-          <h3>Placement Notes</h3>
-          <ul>{notes_items}</ul>
-        </div>
-        """
+        notes_html = f'<div class="notes-section"><h3>Placement Notes</h3><ul>{notes_items}</ul></div>'
+
+    return f"""
+  <div class="header">
+    <h1>{title}</h1>
+    <h2>{artist}</h2>
+    <p class="meta">BPM: {track.bpm:.1f} &middot; Duration: {duration_str} &middot; Phrases: {len(track.phrases)}</p>
+  </div>
+  <div class="legend">{legend_html}</div>
+  {timelines_html}
+  <div class="confidence-section">
+    <h3>Confidence</h3>
+    {confidence_html}
+  </div>
+  {notes_html}
+"""
+
+
+def render_timeline(track: Track, proposal: CueProposal, compare: bool = False) -> str:
+    """Render a complete HTML page with phrase timeline and cue markers for one track."""
+    title = html.escape(track.title)
+    body = _render_track_body(track, proposal, compare)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>djcues &mdash; {title}</title>
+<style>{_PAGE_CSS}</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
+def render_playlist(
+    playlist_name: str,
+    tracks_and_proposals: list[tuple[Track, CueProposal]],
+    compare: bool = False,
+) -> str:
+    """Render a single HTML page with all tracks in a playlist."""
+    escaped_name = html.escape(playlist_name)
+    count = len(tracks_and_proposals)
+
+    track_cards = []
+    for track, proposal in tracks_and_proposals:
+        body = _render_track_body(track, proposal, compare)
+        track_cards.append(f'<div class="track-card">{body}</div>')
+
+    cards_html = "\n".join(track_cards)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>djcues — {title}</title>
-<style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{
-    background: #1a1a2e;
-    color: #eee;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    padding: 24px;
-    line-height: 1.5;
-  }}
-  h1 {{ font-size: 1.6rem; margin-bottom: 4px; }}
-  h2 {{ font-size: 1.1rem; font-weight: 400; color: #aaa; margin-bottom: 16px; }}
-  h3 {{ font-size: 1rem; color: #ccc; margin-bottom: 8px; }}
-  .header {{ margin-bottom: 24px; }}
-  .header .meta {{ color: #888; font-size: 0.9rem; }}
-
-  /* Legend */
-  .legend {{ margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 12px; }}
-  .legend-item {{ display: inline-flex; align-items: center; gap: 5px; font-size: 0.85rem; }}
-  .legend-swatch {{
-    display: inline-block; width: 14px; height: 14px;
-    border-radius: 3px; flex-shrink: 0;
-  }}
-
-  /* Timeline */
-  .timeline-section {{ margin-bottom: 32px; }}
-  .timeline-container {{
-    position: relative;
-    height: 200px;
-    margin: 0 10px;
-  }}
-
-  /* Waveform */
-  .waveform-container {{
-    position: absolute;
-    top: 40px;
-    left: 0; right: 0;
-    height: 80px;
-    background: #111122;
-    border-radius: 4px 4px 0 0;
-    overflow: hidden;
-  }}
-  .waveform-svg {{
-    width: 100%;
-    height: 100%;
-    display: block;
-  }}
-
-  /* Phrase bar */
-  .phrase-bar {{
-    position: absolute;
-    top: 120px;
-    left: 0; right: 0;
-    height: 40px;
-    background: #2a2a3e;
-    border-radius: 0 0 4px 4px;
-    overflow: hidden;
-  }}
-  .phrase-segment {{
-    position: absolute;
-    top: 0; height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    border-right: 1px solid rgba(0,0,0,0.3);
-  }}
-  .phrase-label {{
-    font-size: 0.7rem;
-    color: #fff;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding: 0 3px;
-  }}
-
-  /* Hot cue markers (above waveform) */
-  .hot-cue-marker {{
-    position: absolute;
-    top: 0;
-    width: 0;
-    height: 40px;
-    border-left: 2px solid;
-    z-index: 10;
-  }}
-  .hot-cue-marker .marker-label {{
-    position: absolute;
-    top: -2px;
-    left: 4px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    white-space: nowrap;
-  }}
-
-  /* Memory cue markers (below phrase bar) */
-  .mem-cue-marker {{
-    position: absolute;
-    top: 160px;
-    width: 0;
-    height: 40px;
-    border-left: 2px dashed;
-    z-index: 10;
-  }}
-  .mem-cue-marker .marker-label {{
-    position: absolute;
-    bottom: -2px;
-    left: 4px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    white-space: nowrap;
-  }}
-
-  /* Loop range bars */
-  .loop-range {{
-    position: absolute;
-    height: 4px;
-    opacity: 0.5;
-    border-radius: 2px;
-    z-index: 5;
-  }}
-  .hot-loop {{ top: 36px; }}
-  .mem-loop {{ top: 160px; }}
-
-  /* Confidence bars */
-  .confidence-section {{ margin-bottom: 24px; }}
-  .conf-row {{
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-  }}
-  .conf-pad {{ font-weight: 700; font-family: monospace; width: 28px; text-align: center; }}
-  .conf-label {{ width: 140px; font-size: 0.85rem; color: #aaa; }}
-  .conf-bar-bg {{
-    flex: 1;
-    height: 14px;
-    background: #2a2a3e;
-    border-radius: 3px;
-    overflow: hidden;
-    max-width: 300px;
-  }}
-  .conf-bar-fill {{
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.3s;
-  }}
-  .conf-pct {{ width: 40px; text-align: right; font-size: 0.85rem; color: #888; }}
-
-  /* Notes */
-  .notes-section {{ margin-top: 20px; }}
-  .notes-section ul {{ list-style: none; padding-left: 0; }}
-  .notes-section li {{
-    font-size: 0.85rem;
-    color: #aaa;
-    padding: 2px 0;
-  }}
-  .notes-section li::before {{
-    content: "\\2022\\00a0";
-    color: #555;
-  }}
-</style>
+<title>djcues &mdash; {escaped_name} ({count} tracks)</title>
+<style>{_PAGE_CSS}</style>
 </head>
 <body>
-  <div class="header">
-    <h1>{title}</h1>
-    <h2>{artist}</h2>
-    <p class="meta">BPM: {track.bpm:.1f} &middot; Duration: {duration_str} &middot; Phrases: {len(track.phrases)}</p>
-  </div>
-
-  <div class="legend">{legend_html}</div>
-
-  {timelines_html}
-
-  <div class="confidence-section">
-    <h3>Confidence</h3>
-    {confidence_html}
-  </div>
-
-  {notes_html}
+<div class="header" style="margin-bottom:32px;">
+  <h1>{escaped_name}</h1>
+  <p class="meta">{count} tracks</p>
+</div>
+{cards_html}
 </body>
 </html>"""

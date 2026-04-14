@@ -239,45 +239,61 @@ def compare(playlist_name, track_name, all_tracks, offset, loop_bars):
 @cli.command()
 @click.argument("playlist")
 @click.argument("track_name", required=False)
+@click.option("--all", "all_tracks", is_flag=True, help="Visualize all tracks in playlist")
 @click.option("--compare", "compare_mode", is_flag=True, help="Show existing vs proposed")
 @click.option("--offset", default=16, help="Memory cue offset in bars (default: 16)")
 @click.option("--loop-bars", default=4, help="Loop length in bars (default: 4)")
 @click.option("--output", "-o", default=None, help="Output file path (default: auto-generated)")
-def viz(playlist, track_name, compare_mode, offset, loop_bars, output):
+def viz(playlist, track_name, all_tracks, compare_mode, offset, loop_bars, output):
     """Generate an HTML timeline visualization."""
     import pathlib
     import webbrowser
-    from djcues.viz import render_timeline
+    from djcues.viz import render_timeline, render_playlist
 
     pl = find_playlist(playlist)
     if pl is None:
         click.echo(f"Playlist '{playlist}' not found.", err=True)
         raise SystemExit(1)
 
-    if not track_name:
-        click.echo("Track name is required for viz.", err=True)
-        raise SystemExit(1)
-
     tracks = load_playlist_tracks(pl.ID)
-    matches = [t for t in tracks if track_name.lower() in t.title.lower()]
-    if not matches:
-        click.echo(f"No track matching '{track_name}' in playlist '{playlist}'.", err=True)
-        raise SystemExit(1)
-
-    track = matches[0]
-    if not track.phrases:
-        click.echo(f"{track.title} has no phrase data.", err=True)
-        raise SystemExit(1)
-
     strategy = CueStrategy(memory_offset_bars=offset, loop_length_bars=loop_bars)
-    proposal = strategy.propose(track)
-    page_html = render_timeline(track, proposal, compare=compare_mode)
 
-    if output:
-        out_path = pathlib.Path(output)
+    if all_tracks:
+        pairs = []
+        for t in tracks:
+            if t.phrases:
+                pairs.append((t, strategy.propose(t)))
+            else:
+                click.echo(f"  Skipping {t.title} (no phrase data)", err=True)
+        click.echo(f"Rendering {len(pairs)} tracks...")
+        page_html = render_playlist(playlist, pairs, compare=compare_mode)
+        if output:
+            out_path = pathlib.Path(output)
+        else:
+            safe_name = "".join(c if c.isalnum() or c in " -_" else "" for c in playlist).strip().replace(" ", "-").lower()
+            out_path = pathlib.Path(f"{safe_name}-cues.html")
     else:
-        safe_name = "".join(c if c.isalnum() or c in " -_" else "" for c in track.title).strip().replace(" ", "-").lower()
-        out_path = pathlib.Path(f"{safe_name}-cues.html")
+        if not track_name:
+            click.echo("Provide a track name or use --all.", err=True)
+            raise SystemExit(1)
+
+        matches = [t for t in tracks if track_name.lower() in t.title.lower()]
+        if not matches:
+            click.echo(f"No track matching '{track_name}' in playlist '{playlist}'.", err=True)
+            raise SystemExit(1)
+
+        track = matches[0]
+        if not track.phrases:
+            click.echo(f"{track.title} has no phrase data.", err=True)
+            raise SystemExit(1)
+
+        proposal = strategy.propose(track)
+        page_html = render_timeline(track, proposal, compare=compare_mode)
+        if output:
+            out_path = pathlib.Path(output)
+        else:
+            safe_name = "".join(c if c.isalnum() or c in " -_" else "" for c in track.title).strip().replace(" ", "-").lower()
+            out_path = pathlib.Path(f"{safe_name}-cues.html")
 
     out_path.write_text(page_html, encoding="utf-8")
     click.echo(f"Written to {out_path}")
