@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import warnings
 import click
@@ -298,3 +299,127 @@ def viz(playlist, track_name, all_tracks, compare_mode, offset, loop_bars, outpu
     out_path.write_text(page_html, encoding="utf-8")
     click.echo(f"Written to {out_path}")
     webbrowser.open(f"file://{out_path.resolve()}")
+
+
+@cli.command()
+@click.argument("playlist")
+@click.argument("track_name", required=False)
+@click.option("--all", "all_tracks", is_flag=True, help="Review all tracks in playlist")
+@click.option("--offset", default=16, help="Memory cue offset in bars (default: 16)")
+@click.option("--loop-bars", default=4, help="Loop length in bars (default: 4)")
+@click.option("--output", "-o", default=None, help="Output directory (default: current dir)")
+def review(playlist, track_name, all_tracks, offset, loop_bars, output):
+    """Launch interactive review session in browser."""
+    import pathlib
+    import time
+    import webbrowser
+    from djcues.review import create_session, render_review_html
+    from djcues.server import start_server
+
+    pl = find_playlist(playlist)
+    if pl is None:
+        click.echo(f"Playlist '{playlist}' not found.", err=True)
+        raise SystemExit(1)
+
+    tracks = load_playlist_tracks(pl.ID)
+    if not tracks:
+        click.echo(f"No tracks found in playlist '{playlist}'.", err=True)
+        raise SystemExit(1)
+
+    strategy = CueStrategy(memory_offset_bars=offset, loop_length_bars=loop_bars)
+
+    if all_tracks:
+        selected = tracks
+    elif track_name:
+        selected = [t for t in tracks if track_name.lower() in t.title.lower()]
+        if not selected:
+            click.echo(f"No track matching '{track_name}' in playlist '{playlist}'.", err=True)
+            raise SystemExit(1)
+    else:
+        click.echo("Provide a track name or use --all.", err=True)
+        raise SystemExit(1)
+
+    pairs = []
+    for t in selected:
+        if t.phrases:
+            pairs.append((t, strategy.propose(t)))
+        else:
+            click.echo(f"  Skipping {t.title} (no phrase data)", err=True)
+
+    if not pairs:
+        click.echo("No tracks with phrase data to review.", err=True)
+        raise SystemExit(1)
+
+    # Generate session
+    session = create_session(
+        playlist_name=playlist,
+        playlist_id=pl.ID,
+        tracks_and_proposals=pairs,
+        memory_offset_bars=offset,
+        loop_length_bars=loop_bars,
+    )
+
+    # Determine output directory and safe name
+    safe_name = "".join(
+        c if c.isalnum() or c in " -_" else "" for c in playlist
+    ).strip().replace(" ", "-").lower()
+
+    if output:
+        out_dir = pathlib.Path(output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir = pathlib.Path(".")
+
+    session_path = out_dir / f"{safe_name}-session.json"
+    session_path.write_text(
+        json.dumps(session, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    # Start local server
+    html_path = out_dir / f"{safe_name}-review.html"
+    server, port = start_server(
+        html_path=html_path,
+        session_path=session_path,
+    )
+    server_url = f"http://127.0.0.1:{port}"
+
+    # Generate review HTML with server URL embedded
+    review_html = render_review_html(
+        playlist_name=playlist,
+        tracks_and_proposals=pairs,
+        session_path=str(session_path),
+        server_url=server_url,
+    )
+    html_path.write_text(review_html, encoding="utf-8")
+
+    # Open browser
+    webbrowser.open(server_url)
+
+    # Print info
+    click.echo(f"Session: {session_path}")
+    click.echo(f"Server:  {server_url}")
+    click.echo(f"Apply:   uv run djcues apply {session_path}")
+
+    # Block until interrupted
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped.")
+
+
+@cli.command()
+@click.argument("session_file", type=click.Path(exists=True))
+@click.option("--dry-run", is_flag=True, help="Show what would be written without making changes")
+@click.option("--force", is_flag=True, help="Skip overwrite confirmation")
+def apply(session_file, dry_run, force):
+    """Apply a review session to the rekordbox database."""
+    import pathlib
+    from djcues.writer import apply_session
+
+    apply_session(
+        session_path=pathlib.Path(session_file),
+        dry_run=dry_run,
+        force=force,
+    )
