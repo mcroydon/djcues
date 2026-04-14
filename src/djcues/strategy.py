@@ -75,38 +75,84 @@ class CueStrategy:
             notes.append("D (Drop): no Chorus found — skipped")
             confidence["D"] = 0.0
 
-        # --- C: Vocal / Buildup (last Up/Verse before Drop) ---
-        if "D" in positions:
-            drop_ms = positions["D"]
-            ups_before = [
-                p for p in phrases
-                if p.label in ("Up", "Verse1", "Verse2", "Verse3", "Verse4", "Verse5", "Verse6")
-                and p.position_ms < drop_ms
-            ]
-            if ups_before:
-                vocal_phrase = ups_before[-1]
-                positions["C"] = vocal_phrase.position_ms
-                confidence["C"] = 0.7
-                notes.append(f"C (Vocal/Buildup): {vocal_phrase.label} at beat {vocal_phrase.beat_start}")
+        # --- C: Vocal / Buildup ---
+        # Primary: use PVDI vocal detection to find first strong vocal onset
+        # before the Drop, snapped to nearest phrase boundary.
+        # Fallback: phrase-based heuristic (last Up before Drop).
+        vocal_placed = False
+        c_drop_ms = positions.get("D", track.duration_ms)
+        if track.vocal_track:
+            frame_ms = 1024 / 22050 * 1000  # ~46.4ms per PVDI frame
+            vt = track.vocal_track
+            min_frames = int(2000 / frame_ms)  # require at least 2s of vocal
+            i = 0
+            while i < len(vt):
+                if vt[i] >= 3:  # strong vocal confidence
+                    start = i
+                    while i < len(vt) and vt[i] > 0:
+                        i += 1
+                    region_ms = start * frame_ms
+                    if i - start >= min_frames and region_ms < c_drop_ms:
+                        # Snap to nearest phrase boundary
+                        best_phrase = None
+                        best_dist = float("inf")
+                        for p in phrases:
+                            dist = abs(p.position_ms - region_ms)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_phrase = p
+                        if best_phrase and best_dist < bg.bars_to_ms(4):
+                            positions["C"] = best_phrase.position_ms
+                            confidence["C"] = 0.85
+                            notes.append(
+                                f"C (Vocal/Buildup): vocal at {region_ms / 1000:.1f}s, "
+                                f"snapped to {best_phrase.label} beat {best_phrase.beat_start}"
+                            )
+                        else:
+                            snap_beat = bg.ms_to_beat(region_ms)
+                            bar_beat = ((snap_beat - 1) // 4) * 4 + 1
+                            positions["C"] = bg.beat_to_ms(bar_beat)
+                            confidence["C"] = 0.8
+                            notes.append(
+                                f"C (Vocal/Buildup): vocal at {region_ms / 1000:.1f}s, "
+                                f"snapped to beat {bar_beat}"
+                            )
+                        vocal_placed = True
+                        break
+                else:
+                    i += 1
+
+        if not vocal_placed:
+            if "D" in positions:
+                ups_before = [
+                    p for p in phrases
+                    if p.label in ("Up", "Verse1", "Verse2", "Verse3", "Verse4", "Verse5", "Verse6")
+                    and p.position_ms < c_drop_ms
+                ]
+                if ups_before:
+                    vocal_phrase = ups_before[-1]
+                    positions["C"] = vocal_phrase.position_ms
+                    confidence["C"] = 0.5
+                    notes.append(f"C (Vocal/Buildup): no vocal data, {vocal_phrase.label} at beat {vocal_phrase.beat_start}")
+                else:
+                    before_drop = [p for p in phrases if p.position_ms < c_drop_ms]
+                    if before_drop:
+                        fallback = before_drop[-1]
+                        positions["C"] = fallback.position_ms
+                        confidence["C"] = 0.3
+                        notes.append(f"C (Vocal/Buildup): fallback to {fallback.label} at beat {fallback.beat_start}")
+                    else:
+                        confidence["C"] = 0.0
+                        notes.append("C (Vocal/Buildup): no phrase found before Drop")
             else:
-                before_drop = [p for p in phrases if p.position_ms < drop_ms]
-                if before_drop:
-                    fallback = before_drop[-1]
-                    positions["C"] = fallback.position_ms
-                    confidence["C"] = 0.4
-                    notes.append(f"C (Vocal/Buildup): fallback to {fallback.label} at beat {fallback.beat_start}")
+                ups = [p for p in phrases if p.label in ("Up", "Verse1", "Verse2")]
+                if ups:
+                    positions["C"] = ups[0].position_ms
+                    confidence["C"] = 0.3
+                    notes.append(f"C (Vocal/Buildup): no Drop, using first Up at beat {ups[0].beat_start}")
                 else:
                     confidence["C"] = 0.0
-                    notes.append("C (Vocal/Buildup): no phrase found before Drop")
-        else:
-            ups = [p for p in phrases if p.label in ("Up", "Verse1", "Verse2")]
-            if ups:
-                positions["C"] = ups[0].position_ms
-                confidence["C"] = 0.3
-                notes.append(f"C (Vocal/Buildup): no Drop, using first Up at beat {ups[0].beat_start}")
-            else:
-                confidence["C"] = 0.0
-                notes.append("C (Vocal/Buildup): no suitable phrase found")
+                    notes.append("C (Vocal/Buildup): no suitable phrase found")
 
         # --- E: Breakdown (first Down/Bridge after Drop) ---
         if "D" in positions:
