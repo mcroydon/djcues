@@ -39,19 +39,36 @@ class CueStrategy:
         confidence["B"] = 0.6
         notes.append("B (Loop In): same position as First Beat")
 
-        # --- D: Drop (first Chorus, resolve before C/E/F) ---
+        # --- D: Drop (first Chorus or Up after ~25% of track) ---
+        # The Drop is the first major energy peak after the intro section.
+        # Data shows it's typically around 30% into the track (median).
+        # Look for the first Chorus (or Up preceded by a Chorus) that's
+        # at least 25% into the track. Fallback to first Chorus after
+        # the first Up→Chorus cycle.
         choruses = [p for p in phrases if p.label == "Chorus"]
+        drop_candidates = [p for p in phrases if p.label in ("Chorus", "Up")]
+        min_drop_ms = track.duration_ms * 0.20  # at least 20% into track
         if choruses:
-            # Skip first Chorus if it starts within first 16 bars (64 beats)
-            drop_phrase = choruses[0]
-            if drop_phrase.beat_start <= 16 * 4 and len(choruses) > 1:
-                drop_phrase = choruses[1]
-                notes.append(
-                    f"D (Drop): skipped early Chorus at beat {choruses[0].beat_start}, "
-                    f"using beat {drop_phrase.beat_start}"
-                )
+            # Primary: first Chorus at or after 20% mark
+            late_choruses = [c for c in choruses if c.position_ms >= min_drop_ms]
+            if late_choruses:
+                drop_phrase = late_choruses[0]
+                notes.append(f"D (Drop): first Chorus after 20% at beat {drop_phrase.beat_start}")
             else:
-                notes.append(f"D (Drop): first Chorus at beat {drop_phrase.beat_start}")
+                # All choruses are early — check for an Up after the last early Chorus
+                last_early_chorus = choruses[-1]
+                ups_after = [p for p in phrases
+                             if p.label == "Up"
+                             and p.position_ms > last_early_chorus.position_ms]
+                if ups_after:
+                    drop_phrase = ups_after[0]
+                    notes.append(
+                        f"D (Drop): Up after early Chorus, beat {drop_phrase.beat_start}"
+                    )
+                else:
+                    # Last resort: last Chorus
+                    drop_phrase = choruses[-1]
+                    notes.append(f"D (Drop): last Chorus at beat {drop_phrase.beat_start}")
             positions["D"] = drop_phrase.position_ms
             confidence["D"] = 0.85
         else:
