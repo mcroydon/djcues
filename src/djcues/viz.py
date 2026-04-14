@@ -158,29 +158,64 @@ def _render_confidence_bars(confidence: dict[str, float]) -> str:
     return "\n".join(bars)
 
 
-def _render_waveform(waveform: list[WaveformPoint] | None) -> str:
-    """Render the color waveform as an inline SVG (half-waveform, bars grow upward)."""
+def _render_waveform(
+    waveform: list[WaveformPoint] | None,
+    vocal_track: list[int] | None = None,
+    total_ms: float = 0,
+) -> str:
+    """Render the color waveform as an inline SVG (half-waveform, bars grow upward).
+
+    If vocal_track is provided, renders a vocal indicator strip at the top
+    of the waveform (orange highlight where vocals are detected).
+    """
     if not waveform:
         return ""
     n = len(waveform)
     bar_width = 1
     svg_w = n * bar_width
-    svg_h = 32
+    svg_h = 36  # 32 for waveform + 4 for vocal strip
 
     bars = []
     for i, pt in enumerate(waveform):
         x = i * bar_width
-        bar_h = max(1, int(pt.height * svg_h))
+        bar_h = max(1, int(pt.height * 32))
         color = pt.rgb_hex
-        # Half-waveform: bars grow upward from bottom
         bars.append(
             f'<rect x="{x}" y="{svg_h - bar_h}" width="{bar_width}" '
             f'height="{bar_h}" fill="{color}" />'
         )
 
+    # Vocal overlay strip at top (4px high)
+    vocal_rects = []
+    if vocal_track and total_ms > 0:
+        frame_ms = 1024 / 22050 * 1000  # ~46.4ms per frame
+        vn = len(vocal_track)
+        # Map vocal frames to SVG x coords
+        i = 0
+        while i < vn:
+            if vocal_track[i] > 0:
+                start_i = i
+                max_conf = vocal_track[i]
+                while i < vn and vocal_track[i] > 0:
+                    max_conf = max(max_conf, vocal_track[i])
+                    i += 1
+                # Convert frame indices to SVG x via time proportion
+                start_ms = start_i * frame_ms
+                end_ms = i * frame_ms
+                x1 = start_ms / total_ms * svg_w
+                x2 = end_ms / total_ms * svg_w
+                opacity = 0.3 + (max_conf / 4) * 0.5
+                vocal_rects.append(
+                    f'<rect x="{x1:.1f}" y="0" width="{max(1, x2-x1):.1f}" '
+                    f'height="4" fill="#ff9800" opacity="{opacity:.2f}" />'
+                )
+            else:
+                i += 1
+
     return (
         f'<svg class="waveform-svg" viewBox="0 0 {svg_w} {svg_h}" '
         f'preserveAspectRatio="none">'
+        + "".join(vocal_rects)
         + "".join(bars)
         + "</svg>"
     )
@@ -194,11 +229,12 @@ def _render_timeline_section(
     total_ms: float,
     css_class_prefix: str = "",
     waveform: list[WaveformPoint] | None = None,
+    vocal_track: list[int] | None = None,
 ) -> str:
     """Render one full timeline section (label + hot markers + waveform + phrase bar + mem markers)."""
     phrase_bar = _render_phrase_bar(phrases, total_ms)
     cue_markers = _render_cue_markers(hot_cues, memory_cues, total_ms, css_class_prefix)
-    waveform_html = _render_waveform(waveform)
+    waveform_html = _render_waveform(waveform, vocal_track=vocal_track, total_ms=total_ms)
     return f"""
     <div class="timeline-section">
       <h3>{html.escape(title)}</h3>
@@ -414,21 +450,24 @@ def _render_track_body(
     # Timeline sections
     timelines_html = ""
     wf = track.waveform
+    vt = track.vocal_track
     if compare and track.cues:
         existing_hot = [c for c in track.cues if c.kind > 0]
         existing_mem = [c for c in track.cues if c.kind == 0]
         timelines_html += _render_timeline_section(
             "Existing Cues", existing_hot, existing_mem,
-            track.phrases, total_ms, css_class_prefix="existing", waveform=wf,
+            track.phrases, total_ms, css_class_prefix="existing",
+            waveform=wf, vocal_track=vt,
         )
         timelines_html += _render_timeline_section(
             "Proposed Cues", proposal.hot_cues, proposal.memory_cues,
-            track.phrases, total_ms, css_class_prefix="proposed", waveform=wf,
+            track.phrases, total_ms, css_class_prefix="proposed",
+            waveform=wf, vocal_track=vt,
         )
     else:
         timelines_html += _render_timeline_section(
             "Proposed Cues", proposal.hot_cues, proposal.memory_cues,
-            track.phrases, total_ms, waveform=wf,
+            track.phrases, total_ms, waveform=wf, vocal_track=vt,
         )
 
     confidence_html = _render_confidence_bars(proposal.confidence)

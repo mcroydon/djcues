@@ -94,6 +94,7 @@ class Track:
     phrases: list[Phrase]
     beat_grid: BeatGrid
     waveform: list[WaveformPoint] | None = None  # color waveform data
+    vocal_track: list[int] | None = None  # per-frame vocal confidence (0-4), ~46ms per frame
 
 
 @dataclass

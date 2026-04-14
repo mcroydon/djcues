@@ -150,12 +150,42 @@ def _extract_waveform(track_content: Any, max_points: int = 800) -> list[Wavefor
     return None
 
 
+def _extract_vocal_track(track_content: Any) -> list[int] | None:
+    """Extract PVDI vocal detection data from the .2EX ANLZ file.
+
+    Returns a list of per-frame vocal confidence values (0-4),
+    where each frame covers 1024/22050 ≈ 46.4ms.
+    """
+    import struct
+    anlz_rel = track_content.AnalysisDataPath
+    if not anlz_rel:
+        return None
+    base = __import__("pathlib").Path.home() / "Library/Pioneer/rekordbox/share"
+    ex2_path = base / anlz_rel.lstrip("/").replace("ANLZ0000.DAT", "ANLZ0000.2EX")
+    if not ex2_path.exists():
+        return None
+    try:
+        with open(ex2_path, "rb") as f:
+            data = f.read()
+        pos = data.find(b"PVDI")
+        if pos < 0:
+            return None
+        header_len = struct.unpack(">I", data[pos + 4 : pos + 8])[0]
+        tag_len = struct.unpack(">I", data[pos + 8 : pos + 12])[0]
+        body = data[pos + header_len : pos + tag_len]
+        return list(body)
+    except Exception as e:
+        logger.warning("Could not read vocal track for %s: %s", track_content.Title, e)
+        return None
+
+
 def load_track(track_content: Any) -> Track:
     """Load a single track with all analysis data."""
     beat_grid = _extract_beat_grid(track_content)
     phrases = _extract_phrases(track_content, beat_grid)
     cues = _extract_cues(track_content)
     waveform = _extract_waveform(track_content)
+    vocal_track = _extract_vocal_track(track_content)
 
     artist_name = ""
     if track_content.Artist:
@@ -172,6 +202,7 @@ def load_track(track_content: Any) -> Track:
         phrases=phrases,
         beat_grid=beat_grid,
         waveform=waveform,
+        vocal_track=vocal_track,
     )
 
 
