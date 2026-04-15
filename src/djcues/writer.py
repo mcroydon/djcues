@@ -191,7 +191,7 @@ def apply_session(session_path, dry_run=False, force=False) -> dict:
         )
 
     db = get_db()
-    backup_path = backup_database(pathlib.Path(db.db_path))
+    backup_path = backup_database(db.db_directory / "master.db")
     click.echo(f"Backup: {backup_path}")
 
     written = 0
