@@ -300,6 +300,13 @@ _REVIEW_CSS = """
     border-left-width: 4px !important;
     filter: brightness(1.3);
   }
+
+  /* Existing cue markers are non-interactive */
+  .hot-cue-marker.existing,
+  .mem-cue-marker.existing {
+    cursor: default;
+    opacity: 0.6;
+  }
 """
 
 
@@ -394,6 +401,8 @@ function deselectMarker() {{
 document.addEventListener('click', function(e) {{
   const marker = e.target.closest('.hot-cue-marker');
   if (marker) {{
+    // Only allow selecting proposed cue markers, not existing ones
+    if (marker.classList.contains('existing')) return;
     e.stopPropagation();
     deselectMarker();
     marker.classList.add('selected');
