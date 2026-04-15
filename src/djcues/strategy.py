@@ -272,31 +272,80 @@ class CueStrategy:
                 confidence["E"] = 0.0
                 notes.append("E (Breakdown): no Down/Bridge found")
 
-        # --- F: Special / Second Drop (Chorus after Breakdown) ---
-        if "E" in positions:
-            breakdown_ms = positions["E"]
-            choruses_after = [p for p in phrases if p.label == "Chorus" and p.position_ms > breakdown_ms]
-            if choruses_after:
-                special_phrase = choruses_after[0]
-                positions["F"] = special_phrase.position_ms
-                confidence["F"] = 0.7
-                notes.append(f"F (Special): Chorus at beat {special_phrase.beat_start}")
-            else:
-                confidence["F"] = 0.0
-                notes.append("F (Special): no Chorus found after Breakdown")
-        elif "D" in positions:
+        # --- F: Special / Second Drop (energy recovery after post-Drop dip) ---
+        # Find the first phrase where energy returns to peak levels after
+        # a dip following the Drop. This is the "second drop" in the track.
+        f_placed = False
+        if "D" in positions and track.waveform and phrases:
             drop_ms = positions["D"]
-            later_choruses = [p for p in phrases if p.label == "Chorus" and p.position_ms > drop_ms]
-            if later_choruses:
-                positions["F"] = later_choruses[0].position_ms
-                confidence["F"] = 0.5
-                notes.append(f"F (Special): fallback Chorus at beat {later_choruses[0].beat_start}")
+            n_wf = len(track.waveform)
+
+            # Compute per-phrase energy
+            phrase_energy: list[tuple[Phrase, float]] = []
+            for p in phrases:
+                i0 = int(n_wf * p.position_ms / track.duration_ms)
+                i1 = int(n_wf * (p.position_ms + p.duration_ms) / track.duration_ms)
+                if i1 > i0:
+                    heights = [pt.height for pt in track.waveform[i0:i1]]
+                    phrase_energy.append((p, sum(heights) / len(heights)))
+                else:
+                    phrase_energy.append((p, 0.0))
+
+            peak_energy = max((e for _, e in phrase_energy), default=0)
+            if peak_energy > 0:
+                dip_threshold = peak_energy * 0.75
+                recovery_threshold = peak_energy * 0.85
+
+                # Find ALL dip→recovery cycles after the Drop.
+                # The second drop is the LAST recovery before the Outro.
+                recoveries: list[Phrase] = []
+                dip_found = False
+                for p, energy in phrase_energy:
+                    if p.position_ms <= drop_ms:
+                        continue
+                    if energy < dip_threshold:
+                        dip_found = True
+                    elif dip_found and energy >= recovery_threshold:
+                        recoveries.append(p)
+                        dip_found = False  # reset to find next cycle
+
+                if recoveries:
+                    # Prefer the second recovery (the "second drop")
+                    # but use the first if there's only one
+                    pick = recoveries[1] if len(recoveries) >= 2 else recoveries[0]
+                    positions["F"] = pick.position_ms
+                    confidence["F"] = 0.75
+                    notes.append(
+                        f"F (Special): energy recovery #{min(2, len(recoveries))}"
+                        f"/{len(recoveries)} at {pick.label} beat {pick.beat_start}"
+                    )
+                    f_placed = True
+
+        if not f_placed:
+            # Fallback: first Chorus after Breakdown or Drop
+            if "E" in positions:
+                breakdown_ms = positions["E"]
+                choruses_after = [p for p in phrases if p.label == "Chorus" and p.position_ms > breakdown_ms]
+                if choruses_after:
+                    positions["F"] = choruses_after[0].position_ms
+                    confidence["F"] = 0.5
+                    notes.append(f"F (Special): fallback Chorus at beat {choruses_after[0].beat_start}")
+                else:
+                    confidence["F"] = 0.0
+                    notes.append("F (Special): no Chorus found after Breakdown")
+            elif "D" in positions:
+                drop_ms = positions["D"]
+                later_choruses = [p for p in phrases if p.label == "Chorus" and p.position_ms > drop_ms]
+                if later_choruses:
+                    positions["F"] = later_choruses[0].position_ms
+                    confidence["F"] = 0.5
+                    notes.append(f"F (Special): fallback Chorus at beat {later_choruses[0].beat_start}")
+                else:
+                    confidence["F"] = 0.0
+                    notes.append("F (Special): no later Chorus found")
             else:
                 confidence["F"] = 0.0
-                notes.append("F (Special): no later Chorus found")
-        else:
-            confidence["F"] = 0.0
-            notes.append("F (Special): no Drop or Breakdown to anchor from")
+                notes.append("F (Special): no Drop or Breakdown to anchor from")
 
         # --- G: Outro ---
         outros = [p for p in phrases if p.label == "Outro"]
