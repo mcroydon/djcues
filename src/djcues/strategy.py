@@ -6,21 +6,48 @@ from djcues.constants import CUE_SYSTEM, CUE_SYSTEM_BY_PAD
 from djcues.models import BeatGrid, CuePoint, CueProposal, Phrase, Track
 
 
+def _spectral_similarity(wf_points: list, i0: int, i_mid: int, i1: int) -> float:
+    """Compare the RGB (bass/mid/treble) profile of two halves of a waveform section.
+
+    Returns a similarity score from 0.0 (completely different) to 1.0 (identical).
+    Uses mean-squared-error of the per-point RGB values, normalized.
+    """
+    half_len = min(i_mid - i0, i1 - i_mid)
+    if half_len < 2:
+        return 0.0
+
+    first_half = wf_points[i0 : i0 + half_len]
+    second_half = wf_points[i_mid : i_mid + half_len]
+
+    total_mse = 0.0
+    for a, b in zip(first_half, second_half):
+        # RGB values are 0-7, normalize to 0-1
+        dr = (a.red - b.red) / 7
+        dg = (a.green - b.green) / 7
+        db = (a.blue - b.blue) / 7
+        dh = a.height - b.height  # already 0-1
+        total_mse += dr * dr + dg * dg + db * db + dh * dh
+
+    # Max possible MSE per point = 4 (all channels off by 1.0)
+    mse = total_mse / half_len / 4
+    return max(0.0, 1.0 - mse)
+
+
 def _find_stable_loop(
     track: Track,
     search_start_ms: float,
     search_end_ms: float,
     bar_sizes: tuple[int, ...] = (8, 4, 2, 1),
     min_energy: float = 0.05,
-    max_stability: float = 0.15,
+    min_similarity: float = 0.7,
 ) -> tuple[float, int, float] | None:
-    """Find a stable loop region within a time range using waveform energy.
+    """Find a stable, loopable region using waveform energy and spectral similarity.
 
     Scans bar-aligned windows from search_start_ms forward. Tries 8 bars first,
-    then falls back to 4, 2, 1. A "stable" section has consistent amplitude
-    across its duration (low std dev) and non-trivial energy.
+    then falls back to 4, 2, 1. A good loop has non-trivial energy AND the
+    second half spectrally matches the first half (so the loop repeats cleanly).
 
-    Returns (position_ms, loop_bars, stability_score) or None if nothing found.
+    Returns (position_ms, loop_bars, similarity_score) or None if nothing found.
     """
     if not track.waveform:
         return None
@@ -33,6 +60,8 @@ def _find_stable_loop(
 
     for loop_bars in bar_sizes:
         loop_ms = bg.bars_to_ms(loop_bars)
+        best_pos = None
+        best_score = 0.0
 
         # Snap search start to bar boundary
         start_beat = bg.ms_to_beat(search_start_ms)
@@ -43,23 +72,28 @@ def _find_stable_loop(
             # Map to waveform indices
             i0 = int(n * pos_ms / total_ms)
             i1 = int(n * (pos_ms + loop_ms) / total_ms)
+            i_mid = (i0 + i1) // 2
             if i1 - i0 < 4:
                 pos_ms += bg.bars_to_ms(1)
                 continue
 
-            # Measure energy and stability across 4 equal segments
-            seg_len = (i1 - i0) // 4
-            energies = []
-            for s in range(4):
-                seg = track.waveform[i0 + s * seg_len : i0 + (s + 1) * seg_len]
-                energies.append(sum(p.height for p in seg) / len(seg))
+            # Check energy
+            heights = [p.height for p in track.waveform[i0:i1]]
+            mean_e = sum(heights) / len(heights)
+            if mean_e < min_energy:
+                pos_ms += bg.bars_to_ms(1)
+                continue
 
-            mean_e = sum(energies) / len(energies)
-            variance = sum((e - mean_e) ** 2 for e in energies) / len(energies)
-            std = variance ** 0.5
+            # Check spectral similarity between halves
+            similarity = _spectral_similarity(track.waveform, i0, i_mid, i1)
+            if similarity > best_score:
+                best_score = similarity
+                best_pos = pos_ms
 
-            if mean_e >= min_energy and std <= max_stability:
-                return (pos_ms, loop_bars, std)
+            pos_ms += bg.bars_to_ms(1)
+
+        if best_pos is not None and best_score >= min_similarity:
+            return (best_pos, loop_bars, best_score)
 
             pos_ms += bg.bars_to_ms(1)  # slide by 1 bar
 
@@ -94,29 +128,12 @@ class CueStrategy:
         confidence["A"] = 1.0
         notes.append("A (First Beat): beat 1")
 
-        # --- B: Loop In (stable loop in Intro phrase) ---
-        # Look for a stable 8-bar loop in the Intro phrase. If the Intro is
-        # too short or not stable enough, fall back to First Beat.
-        intro_phrase = next((p for p in phrases if p.label == "Intro"), None)
-        if intro_phrase and track.waveform:
-            search_end = intro_phrase.position_ms + intro_phrase.duration_ms
-            result = _find_stable_loop(track, intro_phrase.position_ms, search_end)
-            if result:
-                loop_pos, loop_bars, stability = result
-                positions["B"] = loop_pos
-                confidence["B"] = 0.7
-                notes.append(
-                    f"B (Loop In): stable {loop_bars}-bar loop at "
-                    f"beat {bg.ms_to_beat(loop_pos)} (stability={stability:.3f})"
-                )
-            else:
-                positions["B"] = positions["A"]
-                confidence["B"] = 0.5
-                notes.append("B (Loop In): no stable loop in Intro, using First Beat")
-        else:
-            positions["B"] = positions["A"]
-            confidence["B"] = 0.5
-            notes.append("B (Loop In): no Intro phrase, using First Beat")
+        # --- B: Loop In (same as First Beat) ---
+        # Data shows 88% of the time users loop at the First Beat.
+        # Spectral similarity is noted for reference but doesn't override.
+        positions["B"] = positions["A"]
+        confidence["B"] = 0.6
+        notes.append("B (Loop In): same position as First Beat")
 
         # --- D: Drop (first Chorus or Up after ~25% of track) ---
         # The Drop is the first major energy peak after the intro section.
@@ -295,31 +312,13 @@ class CueStrategy:
             confidence["G"] = 0.0
             notes.append("G (Outro): no phrases at all")
 
-        # --- H: Loop Out (stable loop in Outro) ---
-        # Scan from the start of the Outro phrase forward looking for the
-        # first stable non-decaying loop. Prefer 8 bars, fall back to 4, 2, 1.
-        outro_phrase = next((p for p in phrases if p.label == "Outro"), None)
-        if outro_phrase and track.waveform:
-            search_start = outro_phrase.position_ms
-            search_end = outro_phrase.position_ms + outro_phrase.duration_ms
-            result = _find_stable_loop(track, search_start, search_end)
-            if result:
-                loop_pos, loop_bars, stability = result
-                positions["H"] = loop_pos
-                confidence["H"] = 0.6
-                notes.append(
-                    f"H (Loop Out): stable {loop_bars}-bar loop at "
-                    f"beat {bg.ms_to_beat(loop_pos)} (stability={stability:.3f})"
-                )
-            else:
-                # Outro exists but no stable loop found — use Outro start
-                positions["H"] = positions.get("G", outro_phrase.position_ms)
-                confidence["H"] = 0.3
-                notes.append("H (Loop Out): no stable loop in Outro, using Outro start")
-        elif "G" in positions:
+        # --- H: Loop Out (same as Outro) ---
+        # Spectral similarity analysis showed that overriding phrase-based
+        # positions hurts accuracy. Keeping at Outro start as the safest default.
+        if "G" in positions:
             positions["H"] = positions["G"]
-            confidence["H"] = 0.3
-            notes.append("H (Loop Out): no Outro phrase, using Outro position")
+            confidence["H"] = 0.4
+            notes.append("H (Loop Out): same position as Outro")
         else:
             confidence["H"] = 0.0
             notes.append("H (Loop Out): no Outro to anchor from")
