@@ -202,7 +202,7 @@ def apply_session(session_path, dry_run=False, force=False) -> dict:
         if status not in ("accepted", "adjusted"):
             continue
 
-        hot_cues_data = track_data.get("hot_cues", {})
+        hot_cues_data = track_data.get("cues", {})
         mem_cues_data = track_data.get("memory_cues", {})
         hot_rows, mem_rows = build_cue_rows(hot_cues_data, mem_cues_data)
 
