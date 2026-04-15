@@ -184,18 +184,30 @@ def apply_session(session_path, dry_run=False, force=False) -> dict:
         click.echo("Dry run — no changes written.")
         return result
 
-    if overwrite_ids and not force:
-        click.confirm(
-            f"{len(overwrite_ids)} track(s) have existing cues. Overwrite?",
-            abort=True,
-        )
-
     db = get_db()
     backup_path = backup_database(db.db_directory / "master.db")
     click.echo(f"Backup: {backup_path}")
 
     written = 0
     cues_written = 0
+
+    # Check DB for existing cues at apply time (not just session flag)
+    overwrite_titles: list[str] = []
+    tracks_with_existing: set[str] = set()
+    for track_id, track_data in tracks.items():
+        status = track_data.get("status", "")
+        if status not in ("accepted", "adjusted"):
+            continue
+        existing = list(db.get_cue(ContentID=int(track_id)))
+        if existing:
+            tracks_with_existing.add(track_id)
+            overwrite_titles.append(track_data.get("title", track_id))
+
+    if overwrite_titles and not force:
+        click.echo(f"\n{len(overwrite_titles)} track(s) have existing cues that will be replaced:")
+        for title in overwrite_titles:
+            click.echo(f"  - {title}")
+        click.confirm("Continue?", abort=True)
 
     for track_id, track_data in tracks.items():
         status = track_data.get("status", "")
@@ -207,7 +219,7 @@ def apply_session(session_path, dry_run=False, force=False) -> dict:
         hot_rows, mem_rows = build_cue_rows(hot_cues_data, mem_cues_data)
 
         content = db.get_content(ID=int(track_id))
-        overwrite = track_id in overwrite_ids
+        overwrite = track_id in tracks_with_existing
         count = write_cues_for_track(db, content, hot_rows, mem_rows, overwrite=overwrite)
         db.commit()
 

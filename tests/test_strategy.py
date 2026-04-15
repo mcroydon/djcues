@@ -130,7 +130,7 @@ def test_memory_cue_offset_16_bars(world_gone_wild: Track):
     offset_ms = bg.bars_to_ms(16)
 
     hot_d = next(c for c in proposal.hot_cues if c.kind == 5)  # Drop
-    mem_4 = next(c for c in proposal.memory_cues if c.comment == "Before Drop")
+    mem_4 = next(c for c in proposal.memory_cues if c.comment == "Drop")
     assert mem_4.position_ms == hot_d.position_ms - offset_ms
 
 
@@ -170,7 +170,7 @@ def test_memory_cue_clamp_to_beat_1(beat_grid: BeatGrid):
     )
     strategy = CueStrategy()
     proposal = strategy.propose(track)
-    mem_drop = next(c for c in proposal.memory_cues if c.comment == "Before Drop")
+    mem_drop = next(c for c in proposal.memory_cues if c.comment == "Drop")
     assert mem_drop.position_ms >= bg.beat_to_ms(1)
 
 
@@ -200,13 +200,13 @@ def test_configurable_offset():
     strategy_8 = CueStrategy(memory_offset_bars=8)
     proposal_8 = strategy_8.propose(track)
     hot_d = next(c for c in proposal_8.hot_cues if c.kind == 5)
-    mem_4 = next(c for c in proposal_8.memory_cues if c.comment == "Before Drop")
+    mem_4 = next(c for c in proposal_8.memory_cues if c.comment == "Drop")
     assert mem_4.position_ms == hot_d.position_ms - bg.bars_to_ms(8)
 
     strategy_16 = CueStrategy(memory_offset_bars=16)
     proposal_16 = strategy_16.propose(track)
     hot_d16 = next(c for c in proposal_16.hot_cues if c.kind == 5)
-    mem_416 = next(c for c in proposal_16.memory_cues if c.comment == "Before Drop")
+    mem_416 = next(c for c in proposal_16.memory_cues if c.comment == "Drop")
     assert mem_416.position_ms == hot_d16.position_ms - bg.bars_to_ms(16)
 
 
