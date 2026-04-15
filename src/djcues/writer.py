@@ -11,6 +11,14 @@ from uuid import uuid4
 from djcues.constants import CUE_SYSTEM, CUE_SYSTEM_BY_PAD
 
 
+def _format_ms(ms: float) -> str:
+    """Format milliseconds as M:SS.s"""
+    total_seconds = ms / 1000
+    minutes = int(total_seconds // 60)
+    seconds = total_seconds % 60
+    return f"{minutes}:{seconds:04.1f}"
+
+
 def backup_database(db_path: pathlib.Path) -> pathlib.Path:
     """Copy master.db to a timestamped backup. Returns the backup path."""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -192,21 +200,44 @@ def apply_session(session_path, dry_run=False, force=False) -> dict:
     cues_written = 0
 
     # Check DB for existing cues at apply time (not just session flag)
-    overwrite_titles: list[str] = []
-    tracks_with_existing: set[str] = set()
+    tracks_with_existing: dict[str, list] = {}  # track_id -> existing cue list
     for track_id, track_data in tracks.items():
         status = track_data.get("status", "")
         if status not in ("accepted", "adjusted"):
             continue
         existing = list(db.get_cue(ContentID=int(track_id)))
         if existing:
-            tracks_with_existing.add(track_id)
-            overwrite_titles.append(track_data.get("title", track_id))
+            tracks_with_existing[track_id] = existing
 
-    if overwrite_titles and not force:
-        click.echo(f"\n{len(overwrite_titles)} track(s) have existing cues that will be replaced:")
-        for title in overwrite_titles:
-            click.echo(f"  - {title}")
+    if tracks_with_existing and not force:
+        from djcues.constants import KIND_TO_PAD
+
+        click.echo(f"\n{len(tracks_with_existing)} track(s) have existing cues that will be replaced:\n")
+        for track_id, existing in tracks_with_existing.items():
+            track_data = tracks[track_id]
+            title = track_data.get("title", track_id)
+            click.echo(f"  {title}")
+
+            # Show existing cues
+            existing_hot = sorted([c for c in existing if c.Kind > 0], key=lambda c: c.Kind)
+            existing_mem = [c for c in existing if c.Kind == 0]
+            click.echo(f"    Existing: {len(existing_hot)} hot, {len(existing_mem)} memory")
+            for c in existing_hot:
+                pad = KIND_TO_PAD.get(c.Kind, "?")
+                click.echo(f"      [{pad}] {c.Comment or '?':20s} {_format_ms(c.InMsec)}")
+
+            # Show proposed cues
+            hot_data = track_data.get("cues", {})
+            new_hot = [(p, d) for p, d in hot_data.items() if d.get("status") != "skipped"]
+            new_mem = [(n, d) for n, d in track_data.get("memory_cues", {}).items() if d.get("status") != "skipped"]
+            click.echo(f"    Proposed: {len(new_hot)} hot, {len(new_mem)} memory")
+            for pad, d in sorted(new_hot):
+                from djcues.constants import CUE_SYSTEM_BY_PAD
+                slot = CUE_SYSTEM_BY_PAD.get(pad)
+                label = slot.hot_cue_label if slot else pad
+                click.echo(f"      [{pad}] {label:20s} {_format_ms(d['position_ms'])}")
+            click.echo()
+
         click.confirm("Continue?", abort=True)
 
     for track_id, track_data in tracks.items():
@@ -219,7 +250,7 @@ def apply_session(session_path, dry_run=False, force=False) -> dict:
         hot_rows, mem_rows = build_cue_rows(hot_cues_data, mem_cues_data)
 
         content = db.get_content(ID=int(track_id))
-        overwrite = track_id in tracks_with_existing
+        overwrite = track_id in tracks_with_existing.keys()
         count = write_cues_for_track(db, content, hot_rows, mem_rows, overwrite=overwrite)
         db.commit()
 
