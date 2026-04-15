@@ -6,6 +6,66 @@ from djcues.constants import CUE_SYSTEM, CUE_SYSTEM_BY_PAD
 from djcues.models import BeatGrid, CuePoint, CueProposal, Phrase, Track
 
 
+def _find_stable_loop(
+    track: Track,
+    search_start_ms: float,
+    search_end_ms: float,
+    bar_sizes: tuple[int, ...] = (8, 4, 2, 1),
+    min_energy: float = 0.05,
+    max_stability: float = 0.15,
+) -> tuple[float, int, float] | None:
+    """Find a stable loop region within a time range using waveform energy.
+
+    Scans bar-aligned windows from search_start_ms forward. Tries 8 bars first,
+    then falls back to 4, 2, 1. A "stable" section has consistent amplitude
+    across its duration (low std dev) and non-trivial energy.
+
+    Returns (position_ms, loop_bars, stability_score) or None if nothing found.
+    """
+    if not track.waveform:
+        return None
+
+    bg = track.beat_grid
+    n = len(track.waveform)
+    total_ms = track.duration_ms
+    if total_ms <= 0 or n == 0:
+        return None
+
+    for loop_bars in bar_sizes:
+        loop_ms = bg.bars_to_ms(loop_bars)
+
+        # Snap search start to bar boundary
+        start_beat = bg.ms_to_beat(search_start_ms)
+        bar_start = ((start_beat - 1) // 4) * 4 + 1
+        pos_ms = bg.beat_to_ms(bar_start)
+
+        while pos_ms + loop_ms <= search_end_ms and pos_ms + loop_ms <= total_ms:
+            # Map to waveform indices
+            i0 = int(n * pos_ms / total_ms)
+            i1 = int(n * (pos_ms + loop_ms) / total_ms)
+            if i1 - i0 < 4:
+                pos_ms += bg.bars_to_ms(1)
+                continue
+
+            # Measure energy and stability across 4 equal segments
+            seg_len = (i1 - i0) // 4
+            energies = []
+            for s in range(4):
+                seg = track.waveform[i0 + s * seg_len : i0 + (s + 1) * seg_len]
+                energies.append(sum(p.height for p in seg) / len(seg))
+
+            mean_e = sum(energies) / len(energies)
+            variance = sum((e - mean_e) ** 2 for e in energies) / len(energies)
+            std = variance ** 0.5
+
+            if mean_e >= min_energy and std <= max_stability:
+                return (pos_ms, loop_bars, std)
+
+            pos_ms += bg.bars_to_ms(1)  # slide by 1 bar
+
+    return None
+
+
 class CueStrategy:
     """Proposes cue placements based on phrase analysis and the cue system."""
 
@@ -34,10 +94,29 @@ class CueStrategy:
         confidence["A"] = 1.0
         notes.append("A (First Beat): beat 1")
 
-        # --- B: Loop In (same as A) ---
-        positions["B"] = positions["A"]
-        confidence["B"] = 0.6
-        notes.append("B (Loop In): same position as First Beat")
+        # --- B: Loop In (stable loop in Intro phrase) ---
+        # Look for a stable 8-bar loop in the Intro phrase. If the Intro is
+        # too short or not stable enough, fall back to First Beat.
+        intro_phrase = next((p for p in phrases if p.label == "Intro"), None)
+        if intro_phrase and track.waveform:
+            search_end = intro_phrase.position_ms + intro_phrase.duration_ms
+            result = _find_stable_loop(track, intro_phrase.position_ms, search_end)
+            if result:
+                loop_pos, loop_bars, stability = result
+                positions["B"] = loop_pos
+                confidence["B"] = 0.7
+                notes.append(
+                    f"B (Loop In): stable {loop_bars}-bar loop at "
+                    f"beat {bg.ms_to_beat(loop_pos)} (stability={stability:.3f})"
+                )
+            else:
+                positions["B"] = positions["A"]
+                confidence["B"] = 0.5
+                notes.append("B (Loop In): no stable loop in Intro, using First Beat")
+        else:
+            positions["B"] = positions["A"]
+            confidence["B"] = 0.5
+            notes.append("B (Loop In): no Intro phrase, using First Beat")
 
         # --- D: Drop (first Chorus or Up after ~25% of track) ---
         # The Drop is the first major energy peak after the intro section.
@@ -216,11 +295,31 @@ class CueStrategy:
             confidence["G"] = 0.0
             notes.append("G (Outro): no phrases at all")
 
-        # --- H: Loop Out (same as Outro) ---
-        if "G" in positions:
+        # --- H: Loop Out (stable loop in Outro) ---
+        # Scan from the start of the Outro phrase forward looking for the
+        # first stable non-decaying loop. Prefer 8 bars, fall back to 4, 2, 1.
+        outro_phrase = next((p for p in phrases if p.label == "Outro"), None)
+        if outro_phrase and track.waveform:
+            search_start = outro_phrase.position_ms
+            search_end = outro_phrase.position_ms + outro_phrase.duration_ms
+            result = _find_stable_loop(track, search_start, search_end)
+            if result:
+                loop_pos, loop_bars, stability = result
+                positions["H"] = loop_pos
+                confidence["H"] = 0.6
+                notes.append(
+                    f"H (Loop Out): stable {loop_bars}-bar loop at "
+                    f"beat {bg.ms_to_beat(loop_pos)} (stability={stability:.3f})"
+                )
+            else:
+                # Outro exists but no stable loop found — use Outro start
+                positions["H"] = positions.get("G", outro_phrase.position_ms)
+                confidence["H"] = 0.3
+                notes.append("H (Loop Out): no stable loop in Outro, using Outro start")
+        elif "G" in positions:
             positions["H"] = positions["G"]
-            confidence["H"] = 0.4
-            notes.append("H (Loop Out): same position as Outro")
+            confidence["H"] = 0.3
+            notes.append("H (Loop Out): no Outro phrase, using Outro position")
         else:
             confidence["H"] = 0.0
             notes.append("H (Loop Out): no Outro to anchor from")
