@@ -4,6 +4,8 @@ Automated hot cue and memory cue placement for rekordbox, based on phrase analys
 
 djcues reads your rekordbox database, analyzes each track's phrase structure and vocal content, proposes cue placements following your cue system, and lets you review, adjust, and apply them back to the database.
 
+![Screenshot of djcues visualization](djcues.png)
+
 ## Installation
 
 Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
