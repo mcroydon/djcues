@@ -24,12 +24,19 @@ def get_db() -> Rekordbox6Database:
 
 
 def find_playlist(name: str) -> Any | None:
-    """Find a playlist by exact name. Returns the pyrekordbox playlist object or None."""
+    """Find a playlist by exact name. Returns the pyrekordbox playlist object or None.
+
+    Prefers actual playlists over folders when names collide.
+    Attribute: 0 or -128 = playlist, 1 = folder.
+    """
     db = get_db()
+    folder_match = None
     for pl in db.get_playlist():
         if pl.Name == name:
-            return pl
-    return None
+            if pl.Attribute != 1:
+                return pl  # actual playlist — return immediately
+            folder_match = pl  # folder — keep as fallback
+    return folder_match
 
 
 def _extract_beat_grid(track_content: Any) -> BeatGrid:
