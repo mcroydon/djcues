@@ -12,5 +12,7 @@ wheels/
 # Superpowers brainstorm sessions
 .superpowers/
 
-# Generated HTML visualizations
+# Generated HTML visualizations and review sessions
 *-cues.html
+*-review.html
+*-session.json
