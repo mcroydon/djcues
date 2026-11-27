@@ -8,10 +8,10 @@ djcues reads your rekordbox database, analyzes each track's phrase structure and
 
 ## Installation
 
-Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <repo-url> && cd dj
+git clone <repo-url> && cd djcues
 uv sync
 ```
 

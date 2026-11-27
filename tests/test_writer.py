@@ -170,3 +170,44 @@ def test_build_cue_rows_handles_auto_status():
 
     # "auto" should be treated as accepted — all 8 memory rows present
     assert len(mem_rows) == 8
+
+
+# ---------------------------------------------------------------------------
+# Test 5: write_cues_for_track builds and adds cue rows
+# ---------------------------------------------------------------------------
+
+
+class _FakeContent:
+    ID = 12345
+    UUID = "00000000-0000-0000-0000-00000000content"
+
+
+class _FakeDb:
+    """Duck-typed stand-in for MasterDatabase covering the write path."""
+
+    def __init__(self):
+        self.added: list = []
+
+    def generate_unused_id(self, table):
+        return 900000 + len(self.added)
+
+    def get_cue(self, **kwargs):
+        return []
+
+    def add(self, cue):
+        self.added.append(cue)
+
+
+def test_write_cues_for_track_creates_cue_rows():
+    from djcues.writer import build_cue_rows, write_cues_for_track
+
+    hot_rows, mem_rows = build_cue_rows(_make_hot_cues(), _make_memory_cues())
+    db = _FakeDb()
+
+    count = write_cues_for_track(db, _FakeContent(), hot_rows, mem_rows)
+
+    assert count == 16
+    assert len(db.added) == 16
+    # Rows carry the track reference and generated IDs
+    assert all(c.ContentID == str(_FakeContent.ID) for c in db.added)
+    assert len({c.ID for c in db.added}) == 16

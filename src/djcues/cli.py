@@ -8,7 +8,7 @@ import warnings
 import click
 
 # Suppress noisy pyrekordbox warnings (PVDI tag, rekordbox running, etc.)
-for _name in ("pyrekordbox", "pyrekordbox.db6", "pyrekordbox.anlz"):
+for _name in ("pyrekordbox", "pyrekordbox.masterdb", "pyrekordbox.anlz"):
     logging.getLogger(_name).setLevel(logging.CRITICAL)
 warnings.filterwarnings("ignore", module="pyrekordbox")
 

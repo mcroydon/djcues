@@ -5,21 +5,21 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from pyrekordbox import Rekordbox6Database
+from pyrekordbox import MasterDatabase
 
 from djcues.constants import resolve_phrase_label
 from djcues.models import BeatGrid, CuePoint, Phrase, Track, WaveformPoint
 
 logger = logging.getLogger(__name__)
 
-_db: Rekordbox6Database | None = None
+_db: MasterDatabase | None = None
 
 
-def get_db() -> Rekordbox6Database:
+def get_db() -> MasterDatabase:
     """Get or create the shared database connection."""
     global _db
     if _db is None:
-        _db = Rekordbox6Database()
+        _db = MasterDatabase()
     return _db
 
 

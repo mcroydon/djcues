@@ -115,7 +115,7 @@ def write_cues_for_track(db, content, hot_rows, mem_rows, overwrite=False) -> in
     If overwrite is True, deletes existing cues first.
     Returns the count of cues written.
     """
-    from pyrekordbox.db6 import tables
+    from pyrekordbox.masterdb import models
 
     if overwrite:
         existing = db.get_cue(ContentID=content.ID)
@@ -124,9 +124,9 @@ def write_cues_for_track(db, content, hot_rows, mem_rows, overwrite=False) -> in
 
     count = 0
     for row in hot_rows + mem_rows:
-        cue_id = db.generate_unused_id(tables.DjmdCue)
+        cue_id = db.generate_unused_id(models.DjmdCue)
         cue_uuid = str(uuid4())
-        cue = tables.DjmdCue.create(
+        cue = models.DjmdCue.create(
             ID=str(cue_id),
             ContentID=str(content.ID),
             ContentUUID=content.UUID,
